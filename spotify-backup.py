@@ -135,12 +135,13 @@ def main():
 	                                                         + '`playlist-read-private` permission)')
 	parser.add_argument('--dump', default='playlists', choices=['liked,playlists', 'playlists,liked', 'playlists', 'liked'],
 	                    help='dump playlists or liked songs, or both (default: playlists)')
-	parser.add_argument('--format', default='txt', choices=['json', 'txt'], help='output format (default: txt)')
-	parser.add_argument('file', help='output filename', nargs='?')
+	parser.add_argument('--format', default='txt', choices=['json', 'txt', 'csv'], help='output format (default: txt)')
+	parser.add_argument('--output-dir', default='.', help='output directory for playlist files (default: current directory)')
+	parser.add_argument('file', help='output filename (for non-CSV formats)', nargs='?')
 	args = parser.parse_args()
 	
-	# If they didn't give a filename, then just prompt them. (They probably just double-clicked.)
-	while not args.file:
+	# If they didn't give a filename for non-CSV formats, then just prompt them.
+	if args.format != 'csv' and not args.file:
 		args.file = input('Enter a file name (e.g. playlists.txt): ')
 		args.format = args.file.split('.')[-1]
 	
@@ -178,44 +179,101 @@ def main():
 			playlist['tracks'] = spotify.list(playlist['tracks']['href'], {'limit': 100})
 		playlists += playlist_data
 	
-	# Write the file.
+	# Write the files
 	logging.info('Writing files...')
-	with open(args.file, 'w', encoding='utf-8') as f:
-		# JSON file.
-		if args.format == 'json':
-			json.dump({
-				'playlists': playlists,
-				'albums': liked_albums
-			}, f)
+	
+	if args.format == 'csv':
+		import csv
+		import os
 		
-		# Tab-separated file.
-		else:
-			f.write('Playlists: \r\n\r\n')
-			for playlist in playlists:
-				f.write(playlist['name'] + '\r\n')
+		# Create csv directory inside output directory if it doesn't exist
+		csv_dir = os.path.join(args.output_dir, 'csv')
+		os.makedirs(csv_dir, exist_ok=True)
+		
+		# Write each playlist to a separate CSV file
+		for playlist in playlists:
+			# Create a safe filename from playlist name
+			safe_name = "".join(x for x in playlist['name'] if x.isalnum() or x in (' ', '-', '_')).rstrip()
+			filename = os.path.join(csv_dir, f"{safe_name}.csv")
+			
+			logging.info(f'Writing playlist to: {filename}')
+			with open(filename, 'w', encoding='utf-8', newline='') as f:
+				writer = csv.writer(f)
+				# Write header
+				writer.writerow(['Track Name', 'Artists', 'Album', 'URI', 'Release Date'])
+				
+				# Write tracks
 				for track in playlist['tracks']:
 					if track['track'] is None:
 						continue
-					f.write('{name}\t{artists}\t{album}\t{uri}\t{release_date}\r\n'.format(
-						uri=track['track']['uri'],
-						name=track['track']['name'],
-						artists=', '.join([artist['name'] for artist in track['track']['artists']]),
-						album=track['track']['album']['name'],
-						release_date=track['track']['album']['release_date']
-					))
-				f.write('\r\n')
-			if len(liked_albums) > 0:
-				f.write('Liked Albums: \r\n\r\n')
+					writer.writerow([
+						track['track']['name'],
+						', '.join([artist['name'] for artist in track['track']['artists']]),
+						track['track']['album']['name'],
+						track['track']['uri'],
+						track['track']['album']['release_date']
+					])
+		
+		# Write liked albums to a separate CSV if present
+		if len(liked_albums) > 0:
+			filename = os.path.join(csv_dir, "Liked_Albums.csv")
+			logging.info(f'Writing liked albums to: {filename}')
+			with open(filename, 'w', encoding='utf-8', newline='') as f:
+				writer = csv.writer(f)
+				writer.writerow(['Album Name', 'Artists', 'URI', 'Release Date'])
 				for album in liked_albums:
-					uri = album['album']['uri']
-					name = album['album']['name']
-					artists = ', '.join([artist['name'] for artist in album['album']['artists']])
-					release_date = album['album']['release_date']
-					album = f'{artists} - {name}'
+					writer.writerow([
+						album['album']['name'],
+						', '.join([artist['name'] for artist in album['album']['artists']]),
+						album['album']['uri'],
+						album['album']['release_date']
+					])
+	
+	else:
+		# Ensure filename is provided for non-CSV formats
+		while not args.file:
+			args.file = input('Enter a file name (e.g. playlists.txt): ')
+			args.format = args.file.split('.')[-1]
+		
+		with open(args.file, 'w', encoding='utf-8') as f:
+			# JSON file.
+			if args.format == 'json':
+				json.dump({
+					'playlists': playlists,
+					'albums': liked_albums
+				}, f)
+			
+			# Tab-separated file.
+			else:
+				f.write('Playlists: \r\n\r\n')
+				for playlist in playlists:
+					f.write(playlist['name'] + '\r\n')
+					for track in playlist['tracks']:
+						if track['track'] is None:
+							continue
+						f.write('{name}\t{artists}\t{album}\t{uri}\t{release_date}\r\n'.format(
+							uri=track['track']['uri'],
+							name=track['track']['name'],
+							artists=', '.join([artist['name'] for artist in track['track']['artists']]),
+							album=track['track']['album']['name'],
+							release_date=track['track']['album']['release_date']
+						))
+					f.write('\r\n')
+				if len(liked_albums) > 0:
+					f.write('Liked Albums: \r\n\r\n')
+					for album in liked_albums:
+						uri = album['album']['uri']
+						name = album['album']['name']
+						artists = ', '.join([artist['name'] for artist in album['album']['artists']])
+						release_date = album['album']['release_date']
+						album = f'{artists} - {name}'
 
-					f.write(f'{name}\t{artists}\t-\t{uri}\t{release_date}\r\n')
+						f.write(f'{name}\t{artists}\t-\t{uri}\t{release_date}\r\n')
 
-	logging.info('Wrote file: ' + args.file)
+	if args.format == 'csv':
+		logging.info(f'Wrote playlist files to directory: {csv_dir}')
+	else:
+		logging.info('Wrote file: ' + args.file)
 
 if __name__ == '__main__':
 	main()
